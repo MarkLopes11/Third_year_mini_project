@@ -1,5 +1,8 @@
 import os
 from urllib.parse import parse_qs, urlparse
+import time # Added for timing operations
+import json # Added for quiz parsing
+import re   # Added for quiz parsing
 
 import assemblyai as aai
 import google.auth.exceptions
@@ -38,7 +41,18 @@ if gemini_api_key:
     os.environ["GOOGLE_API_KEY"] = gemini_api_key
 if assemblyai_api_key:
     os.environ["ASSEMBLYAI_API_KEY"] = assemblyai_api_key
-    aai.api_key = assemblyai_api_key
+    aai.settings.api_key = assemblyai_api_key
+
+# Function to log timing information
+def log_time(operation, duration, video_url):
+    log_file = "time_analysis.txt"
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"{timestamp} | Video: {video_url} | Operation: {operation} | Duration: {duration:.2f} seconds\n"
+    try:
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(log_entry)
+    except Exception as e:
+        print(f"Error writing to log file {log_file}: {e}") # Use print for backend logs
 
 # Function to update status message
 def update_status(message):
@@ -79,6 +93,7 @@ def get_video_id(url):
     return None
 
 # Get YouTube video title using yt-dlp
+@st.cache_data(show_spinner=False)
 def get_youtube_title(video_url):
     try:
         update_status("Fetching video title from YouTube...")
@@ -97,6 +112,7 @@ def get_youtube_title(video_url):
         return "Unknown Title"
 
 # Tool: Get YouTube Transcript
+@st.cache_data(show_spinner=False)
 def get_youtube_transcript(video_url):
     update_status("Retrieving transcript from YouTube Data API...")
     video_id = get_video_id(video_url)
@@ -127,6 +143,7 @@ def get_youtube_transcript(video_url):
 # Tool: Download YouTube Audio
 def download_audio(youtube_url):
     update_status("Downloading audio from YouTube for transcription...")
+    start_time = time.time() # Start timing
     try:
         video_id = get_video_id(youtube_url)
         if not video_id:
@@ -141,6 +158,9 @@ def download_audio(youtube_url):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(youtube_url, download=True)
             update_status("Audio download complete")
+            end_time = time.time() # End timing
+            duration = end_time - start_time
+            log_time("Audio Download", duration, youtube_url)
             return f"{audio_dir}/{video_id}.{info['ext']}", info.get("title", "Unknown Title")
     except Exception as e:
         update_status(f"Audio download failed: {str(e)}")
@@ -149,7 +169,7 @@ def download_audio(youtube_url):
 # Tool: Transcribe Audio with AssemblyAI
 def get_transcription(youtube_url):
     with st.spinner("Initiating transcription with AssemblyAI..."):
-        if not aai.api_key:
+        if not assemblyai_api_key:
             return "AssemblyAI API key is required for transcription", None
 
         video_id = get_video_id(youtube_url)
@@ -162,17 +182,27 @@ def get_transcription(youtube_url):
 
         # Try to load cached transcript first
         if os.path.exists(transcript_path):
+            update_status("Loading cached transcript...")
             with open(transcript_path, "r", encoding="utf-8") as f:
                 transcript_text = f.read()
-            if not st.session_state.video_title:
-                st.session_state.video_title = get_youtube_title(youtube_url)
-            return transcript_text, st.session_state.video_title
+
+            # Get title: Use session state if available, otherwise fetch (cached)
+            cached_title = st.session_state.get("video_title")
+            if not cached_title:
+                cached_title = get_youtube_title(youtube_url) # Will use @st.cache_data
+                st.session_state.video_title = cached_title # Store if fetched
+
+            update_status("Cached transcript loaded successfully")
+            return transcript_text, cached_title # Return the determined title
 
         # If no cached transcript, download audio and transcribe
+        update_status("Downloading audio for transcription...")
         audio_file, video_title = download_audio(youtube_url)
         if isinstance(audio_file, str) and audio_file.startswith("Audio download failed"):
             return audio_file, None
 
+        update_status("Transcribing audio with AssemblyAI...")
+        start_time = time.time() # Start timing transcription
         transcriber = aai.Transcriber()
         config = aai.TranscriptionConfig(
             speaker_labels=True,
@@ -180,14 +210,19 @@ def get_transcription(youtube_url):
             format_text=True
         )
         transcript_obj = transcriber.transcribe(audio_file, config)
+        end_time = time.time() # End timing transcription
 
         if transcript_obj.text:
+            duration = end_time - start_time
+            log_time("AssemblyAI Transcription", duration, youtube_url)
+            update_status("Transcription successful")
             with open(transcript_path, "w", encoding="utf-8") as f:
                 f.write(transcript_obj.text)
             st.session_state.video_title = video_title
             return transcript_obj.text, video_title
-
-        return "Failed to generate transcript", None
+        else:
+            update_status("Failed to generate transcript with AssemblyAI")
+            return "Failed to generate transcript", None
 
 # Tool: Create FAISS Vector Store with improved chunking
 def create_vectorstore(text):
@@ -223,6 +258,7 @@ def create_vectorstore(text):
 # Tool: Chat with Video using Retrieval (improved)
 def chat_with_video(query):
     update_status(f"Processing question: '{query}'...")
+    start_time = time.time() # Start timing QnA
     llm = get_llm()
     if llm is None:
         update_status("Gemini API key is required")
@@ -250,30 +286,62 @@ def chat_with_video(query):
         # Improved prompt with clearer instructions
         update_status("Generating answer based on context...")
         prompt = f"""
-You are an AI assistant specialized in answering questions about YouTube videos based on their transcripts. You can also respond in the user's preferred language.
+You are an intelligent, friendly AI assistant designed to help users understand YouTube videos by answering questions based strictly on the video's transcript. You should also adapt to the user’s preferred language and communication style.
 
-### 🎬 Video Details:  
+---
+
+### 🎬 Video Information:
 - **📌 Title:** {st.session_state.video_title}  
-- **📜 Context from the video based on the user Query:** {context}  
-- **❓ User's Question:** {query}  
+- **📜 Relevant Transcript Context (Based on User's Query):**  
+  {context}
 
-### 📌 Instructions:  
-1. **🔍 Answer strictly based on the provided context.** No assumptions or extra details.  
-2. **⏳ Use timestamps (e.g., 🕒 06:52 - 07:55) if present** to reference specific moments.  
-3. **⚠️ If the context lacks enough information, clearly state what is missing.** No guessing.  
-4. **✍️ Keep the response clear, engaging, and structured.** Use bullet points and formatting to improve readability.  
-5. **🌍 Detect the user's input language from {query} and respond in the same language.**  
-6. **💬 Make it feel natural and conversational.** Avoid robotic tone—keep it user-friendly!  
-7. **🎭 Add emojis based on the context.** For example:  
-   - 🎮 For gaming-related content  
-   - 🎤 For interviews or discussions  
-   - ⚔️ For intense or competitive moments  
-   - 😂 For humorous or lighthearted sections  
+- **❓ User's Question:**  
+  {query}
+
+---
+
+### 📌 Response Guidelines:
+
+1. **🔍 Stick to the Provided Context:**  
+   Respond *only* using the transcript context. Avoid assumptions or adding unrelated info.
+
+2. **🕒 Use Timestamps When Available:**  
+   Reference key moments with timestamps (e.g., 🕒 06:52 - 07:55) to anchor the explanation.
+
+3. **⚠️ Handle Missing Info Gracefully:**  
+   If the transcript doesn't provide enough details, say so clearly—don’t guess or invent.
+
+4. **✍️ Keep the Tone Friendly & Engaging:**  
+   - Use clear, concise language.  
+   - Format with bullet points and bolding for clarity.  
+   - Aim for a casual, human-like tone—not robotic.
+
+5. **🌍 Match the User's Language:**  
+   Detect the language from `{query}` and respond accordingly.
+
+6. **💬 Teach Like a Tutor:**  
+   - Even if the transcript lacks a direct answer, feel free to explain the concept.  
+   - You are a skilled tutor, so help the user understand the topic clearly.
+
+7. **🎭 Use Emojis Thoughtfully:**  
+   Enhance your answer with emojis based on the context:  
+   - 🎮 Gaming  
+   - 🎤 Interviews or discussions  
+   - ⚔️ Competitive moments  
+   - 😂 Funny segments  
+   - 🧠 Explanations and learning moments
+
+---
 
 ### ✅ Your Answer:
 """
         response = llm.invoke(prompt)
         update_status("Answer generated successfully")
+        end_time = time.time() # End timing QnA
+        duration = end_time - start_time
+        # Use the stored URL from session state
+        current_url = st.session_state.get('current_video_url', 'Unknown URL')
+        log_time("QnA Response", duration, current_url)
         return response.content
     except Exception as e:
         update_status(f"Error generating answer: {str(e)}")
@@ -365,9 +433,6 @@ IMPORTANT: Your response must be ONLY the JSON object with no additional text or
         quiz_text = response.content
         
         # Process the response to extract just the JSON part
-        import json
-        import re
-
         # Try to find JSON structure in the response
         json_match = re.search(r'```json\s*(.*?)\s*```', quiz_text, re.DOTALL)
         if json_match:
@@ -394,15 +459,22 @@ IMPORTANT: Your response must be ONLY the JSON object with no additional text or
             ]
         }
         return json.dumps(fallback_quiz)
+
 # Intelligent Transcript Acquisition Logic
+@st.cache_data(show_spinner=False) # Cache the result of transcript retrieval
 def smart_get_transcript(url):
     """Intelligent function that tries multiple methods to get a transcript"""
+    # Try YouTube API first (will use its own cache if hit)
     with st.spinner("Attempting to retrieve transcript from YouTube API..."):
         transcript = get_youtube_transcript(url)
     if transcript and not transcript.startswith("Failed") and not transcript.startswith("Invalid") and not transcript.startswith("Transcript is empty"):
-        return transcript, get_youtube_title(url)
+        # Need title if YouTube API worked
+        title = get_youtube_title(url) # This will also be cached
+        return transcript, title
 
+    # Fallback to AssemblyAI (will use its cache for transcript file)
     with st.spinner("YouTube API failed. Falling back to AssemblyAI transcription..."):
+        # Note: get_transcription handles its own file caching
         transcript, title = get_transcription(url)
     if transcript and not transcript.startswith("Failed") and not transcript.startswith("Audio download failed"):
         return transcript, title
@@ -413,16 +485,21 @@ def smart_get_transcript(url):
 def process_video(url):
     # Reset status message
     st.session_state.status_message = ""
-    
+    st.session_state.current_video_url = url # Store URL for logging
+
     update_status(f"Processing video: {url}")
-    st.session_state.video_title = get_youtube_title(url)
     
-    # Use our intelligent transcript retrieval function
+    # Use our intelligent transcript retrieval function (cached)
+    # It returns both transcript and title
     transcript, title = smart_get_transcript(url)
-    # Update title if available
+
+    # Update title if available from smart_get_transcript
     if title:
-        st.session_state.video_title = title
-    
+        st.session_state.video_title = title # Use title returned by the cached function
+    else:
+        # Attempt to get title even if transcript failed, might still be useful
+        st.session_state.video_title = get_youtube_title(url)
+
     if transcript:
         st.session_state.transcript = transcript  # save for summary/quiz later
         create_vectorstore(transcript)
@@ -433,6 +510,7 @@ def process_video(url):
         return True
     else:
         update_status("Failed to process video - could not obtain transcript")
+        st.session_state.current_video_url = None # Clear URL on failure
         return False
 
 # Define Tools for Agent
@@ -654,9 +732,6 @@ if gemini_api_key and assemblyai_api_key:
                     if isinstance(quiz_response, str):
                         try:
                             # Extract JSON part from the response
-                            import json
-                            import re
-
                             # Find JSON content between triple backticks if present
                             json_match = re.search(r'```json\s*(.*?)\s*```', quiz_response, re.DOTALL)
                             if json_match:
