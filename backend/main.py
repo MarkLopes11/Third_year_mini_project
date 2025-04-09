@@ -38,7 +38,7 @@ if gemini_api_key:
     os.environ["GOOGLE_API_KEY"] = gemini_api_key
 if assemblyai_api_key:
     os.environ["ASSEMBLYAI_API_KEY"] = assemblyai_api_key
-    aai.api_key = assemblyai_api_key
+    aai.settings.api_key = assemblyai_api_key
 
 # Function to update status message
 def update_status(message):
@@ -149,7 +149,7 @@ def download_audio(youtube_url):
 # Tool: Transcribe Audio with AssemblyAI
 def get_transcription(youtube_url):
     with st.spinner("Initiating transcription with AssemblyAI..."):
-        if not aai.api_key:
+        if not assemblyai_api_key:
             return "AssemblyAI API key is required for transcription", None
 
         video_id = get_video_id(youtube_url)
