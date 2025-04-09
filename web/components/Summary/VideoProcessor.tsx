@@ -32,7 +32,7 @@ export default function VideoProcessor({ onProcessComplete }) {
 
     try {
       // Process video first
-      const processResponse = await fetch("http://localhost:8000/process_video/", {
+      const processResponse = await fetch("https://021c-106-194-240-111.ngrok-free.app/process_video/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ video_url: videoUrl }),

@@ -61,7 +61,7 @@ export default function VideoSummaryPartition() {
         const videoUrl = `https://youtube.com/watch?v=${videoId}`;
 
         // First, process the video
-        const processResponse = await fetch("http://localhost:8000/process_video/", {
+        const processResponse = await fetch("https://021c-106-194-240-111.ngrok-free.app/process_video/", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ video_url: videoUrl }),
@@ -84,7 +84,7 @@ export default function VideoSummaryPartition() {
       try {
         setProcessingStep("summarizing");
 
-        const response = await fetch("http://localhost:8000/summarize_video/", {
+        const response = await fetch("https://021c-106-194-240-111.ngrok-free.app/summarize_video/", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ video_id: videoId }),

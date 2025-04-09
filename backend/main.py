@@ -42,6 +42,7 @@ if gemini_api_key:
 if assemblyai_api_key:
     os.environ["ASSEMBLYAI_API_KEY"] = assemblyai_api_key
     aai.settings.api_key = assemblyai_api_key
+<<<<<<< HEAD
 
 # Function to log timing information
 def log_time(operation, duration, video_url):
@@ -53,6 +54,8 @@ def log_time(operation, duration, video_url):
             f.write(log_entry)
     except Exception as e:
         print(f"Error writing to log file {log_file}: {e}") # Use print for backend logs
+=======
+>>>>>>> 5de64a147c63b90c30d081ead9f596ac6c67ba78
 
 # Function to update status message
 def update_status(message):

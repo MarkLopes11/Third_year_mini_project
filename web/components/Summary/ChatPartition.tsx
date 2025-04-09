@@ -84,7 +84,7 @@ export default function ChatPartition() {
     if (USE_API) {
       try {
         // Make API request with videoId from context
-        const response = await fetch('http://localhost:8000/chat_with_video/', {
+        const response = await fetch('https://021c-106-194-240-111.ngrok-free.app/chat_with_video/', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
